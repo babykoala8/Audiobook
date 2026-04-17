@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <title>AI 智能 PDF 阅读器 (完美光标版)</title>
+    <title>AI 智能 PDF 阅读器 (抗卡死终极版)</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://fastly.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.min.js"></script>
@@ -35,7 +35,6 @@
 
     <div class="card">
         <select id="chapter-select"><option value="">-- 请等待文件解析 --</option></select>
-        
         <div class="smart-tip">💡 <b>高级控制：</b>默认朗读全章；用鼠标选中文字可只读该部分；在文中点击一下可从光标处开始读。</div>
         
         <div class="btn-group">
@@ -48,8 +47,13 @@
     <script>
         let synth = window.speechSynthesis;
         let chapters = [];
-        
         const baseChapterRegex = /(第\s*[一二三四五六七八九十百0-9]+\s*[章节回篇].*|Chapter\s*\d+.*)/i;
+
+        // 全局发声控制变量（极其重要，防止失控）
+        let textChunks = [];
+        let currentChunkIndex = 0;
+        let isCustomPlaying = false; 
+        window.currentUtterance = null; // 强行保留内存引用，防止浏览器失忆Bug
 
         window.onload = function() {
             if (typeof pdfjsLib === 'undefined') {
@@ -60,7 +64,7 @@
             }
         };
 
-        // --- PDF 解析模块 (保持不变) ---
+        // --- PDF 解析核心 (未变动) ---
         document.getElementById('file-upload').addEventListener('change', async function(e) {
             const file = e.target.files[0];
             if (!file) return;
@@ -72,7 +76,6 @@
                 try {
                     const typedarray = new Uint8Array(this.result);
                     const pdf = await pdfjsLib.getDocument(typedarray).promise;
-                    
                     let tocTitles = [];
                     const scanLimit = Math.min(15, pdf.numPages);
                     for (let i = 1; i <= scanLimit; i++) {
@@ -94,10 +97,8 @@
                     for (let i = 1; i <= pdf.numPages; i++) {
                         const page = await pdf.getPage(i);
                         document.getElementById('progress-fill').style.width = (i/pdf.numPages*100) + "%";
-                        
                         let pageText = await extractSmartText(page, i);
                         const lines = pageText.split('\n');
-                        
                         for (let line of lines) {
                             const trimmedLine = line.trim();
                             if (trimmedLine.length < 30 && trimmedLine.length > 2) {
@@ -166,74 +167,120 @@
                 document.getElementById('text-area').value = chapters[index].text;
                 document.getElementById('text-area').scrollTop = 0;
                 stopReading();
-                startReading();
+                setTimeout(() => startReading(), 300);
             }
         });
 
-        // --- 播放引擎控制 ---
+        // ==========================================
+        // 🚨 终极防卡死语音引擎 🚨
+        // ==========================================
         const toggleBtn = document.getElementById('toggle-btn');
         function setButtonPlayState() { toggleBtn.innerText = "▶ 播放"; toggleBtn.className = "btn-play"; }
         function setButtonPauseState() { toggleBtn.innerText = "⏸ 暂停"; toggleBtn.className = "btn-pause"; }
 
         function togglePlayPause() {
-            if (synth.speaking && !synth.paused) {
-                synth.pause(); setButtonPlayState(); document.getElementById('status').innerText = "⏸ 已暂停";
-            } else if (synth.paused) {
-                synth.resume(); setButtonPauseState(); document.getElementById('status').innerText = "📖 恢复播放...";
-            } else {
+            if (!isCustomPlaying && currentChunkIndex === 0) {
+                // 完全没在读，从头启动
                 startReading();
+            } else if (isCustomPlaying && !synth.paused) {
+                // 正在读，要求暂停
+                synth.pause();
+                setButtonPlayState();
+                document.getElementById('status').innerText = "⏸ 已暂停";
+            } else if (synth.paused) {
+                // 已被暂停，要求继续
+                synth.resume();
+                setButtonPauseState();
+                document.getElementById('status').innerText = "📖 恢复播放...";
             }
         }
 
         function startReading() {
-            synth.cancel(); 
+            stopReading(); // 确保彻底清空旧任务
             
             const textArea = document.getElementById('text-area');
             const fullText = textArea.value;
             if (!fullText) return;
 
-            // ==========================================
-            // 🚨 核心修复：彻底解决“幽灵光标” Bug 
-            // ==========================================
             const startPos = textArea.selectionStart;
             const endPos = textArea.selectionEnd;
             let rawText = fullText;
             
+            // 处理光标位置 (修复了停在末尾不发声的问题)
             if (startPos !== endPos) {
-                // 情况一：用户明确用鼠标划蓝了一段字
                 rawText = fullText.substring(startPos, endPos);
             } else if (startPos > 0 && startPos < fullText.length) {
-                // 情况二：光标真的停在文章“中间”
                 rawText = fullText.substring(startPos);
             } else {
-                // 情况三：光标在 0（最开头）或者 = fullText.length（刚传完文件/打完字在最末尾）
-                // 统统按读全文处理！
                 rawText = fullText;
             }
 
-            // 用回车切开丢进系统排队
-            let validChunks = rawText.split('\n').map(c => c.trim()).filter(c => c.length > 0);
+            // 1. 切片：先按换行和标点切开
+            let rawChunks = rawText.replace(/([。！？；.!?;\n])/g, "$1|").split('|');
             
-            if (validChunks.length === 0) return;
+            // 2. 细化：每片绝对不能超过50个字，彻底防噎死
+            textChunks = [];
+            for (let c of rawChunks) {
+                c = c.trim();
+                if (!c) continue;
+                while (c.length > 50) {
+                    textChunks.push(c.substring(0, 50));
+                    c = c.substring(50);
+                }
+                if (c.length > 0) textChunks.push(c);
+            }
+            
+            if (textChunks.length === 0) return;
+
+            isCustomPlaying = true;
+            currentChunkIndex = 0;
             document.getElementById('status').innerText = "📖 正在朗读...";
             setButtonPauseState();
+            
+            // 开始接力喂食
+            playNextChunk();
+        }
 
-            for (let i = 0; i < validChunks.length; i++) {
-                let u = new SpeechSynthesisUtterance(validChunks[i]);
-                u.lang = 'zh-CN';
-                u.rate = 1.1;
-                
-                if (i === validChunks.length - 1) {
-                    u.onend = () => {
-                        document.getElementById('status').innerText = "✅ 朗读结束。";
-                        setButtonPlayState();
-                    };
-                }
-                synth.speak(u); 
+        // 递归函数：喂一句，等一句，再喂下一句
+        function playNextChunk() {
+            if (!isCustomPlaying) return; // 如果被手动停止，立刻阻断循环
+
+            if (currentChunkIndex >= textChunks.length) {
+                document.getElementById('status').innerText = "✅ 朗读结束。";
+                stopReading(); // 正常读完，重置状态
+                return;
             }
+
+            let text = textChunks[currentChunkIndex];
+            let u = new SpeechSynthesisUtterance(text);
+            u.lang = 'zh-CN';
+            u.rate = 1.1;
+
+            // 💡 神级补丁：把这小段挂载到浏览器的全局窗口上，防止它被偷偷当垃圾回收掉
+            window.currentUtterance = u; 
+
+            u.onend = function() {
+                if (!isCustomPlaying) return; 
+                currentChunkIndex++;
+                // 留 50 毫秒的喘息时间，防止浏览器假死，然后读下一句
+                setTimeout(() => playNextChunk(), 50); 
+            };
+
+            u.onerror = function(e) {
+                console.warn("语音片段跳过", e);
+                if (!isCustomPlaying) return;
+                currentChunkIndex++;
+                setTimeout(() => playNextChunk(), 50);
+            };
+
+            synth.speak(u);
         }
 
         function stopReading() { 
+            isCustomPlaying = false; 
+            currentChunkIndex = 0;
+            textChunks = [];
+            window.currentUtterance = null;
             synth.cancel(); 
             setButtonPlayState(); 
             document.getElementById('status').innerText = "⏹ 播放已停止"; 
