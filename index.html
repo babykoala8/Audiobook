@@ -1,31 +1,108 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <title>AI 智能 PDF 章节阅读器 (精准朗读版)</title>
+    <title>AI 智能 PDF 章节阅读器</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; line-height: 1.6; max-width: 900px; margin: 0 auto; background-color: #f0f2f5; color: #333; }
-        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-bottom: 20px; }
-        h1 { text-align: center; color: #1a73e8; }
-        .timer-info { color: #d93025; font-weight: bold; text-align: center; margin: 10px 0; font-size: 1.1em; }
-        select { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #ccc; font-size: 16px; margin: 10px 0; }
-        #text-area { width: 100%; height: 400px; padding: 15px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 16px; background: #fafafa; }
-        .btn-group { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 15px; }
-        button { flex: 1; min-width: 120px; padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; transition: 0.3s; color: white; }
+        body { font-family: sans-serif; padding: 15px; line-height: 1.5; max-width: 800px; margin: 0 auto; background-color: #f0f2f5; }
+        .card { background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 15px; }
+        h1 { text-align: center; color: #1a73e8; margin-top: 0; }
+        .timer-info { color: #d93025; font-weight: bold; text-align: center; margin-bottom: 10px; }
+        #file-upload { width: 100%; padding: 10px 0; margin: 10px 0; }
+        #chapter-select { width: 100%; padding: 10px; margin: 10px 0; border-radius: 5px; }
+        #text-area { width: 100%; height: 350px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; font-size: 16px; }
+        .btn-group { display: flex; gap: 8px; margin: 10px 0; }
+        button { flex: 1; padding: 12px; border: none; border-radius: 5px; cursor: pointer; color: white; font-size: 15px; }
         .btn-play { background-color: #34a853; }
         .btn-pause { background-color: #fbbc05; }
         .btn-stop { background-color: #ea4335; }
-        #status { padding: 10px; border-radius: 6px; background: #e8f0fe; color: #1967d2; font-size: 14px; margin-bottom: 10px; }
-        .progress-bar { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; margin-top: 5px; }
+        #status { padding: 8px; background: #e8f0fe; color: #1967d2; font-size: 13px; margin-bottom: 10px; border-radius: 4px; }
+        .progress-bar { height: 6px; background: #eee; border-radius: 3px; overflow: hidden; }
         #progress-fill { height: 100%; background: #1a73e8; width: 0%; transition: 0.3s; }
-        .smart-tip { font-size: 14px; color: #e67e22; background: #fdf2e9; padding: 10px; border-radius: 6px; margin-bottom: 15px; border-left: 4px solid #e67e22; }
     </style>
 </head>
 <body>
 
     <div class="card">
         <h1>📚 智能章节阅读器</h1>
-        <p>1. 上传文件 | 2. 等待目录提取 | 3. 选择章节或等待
+        <div id="status">准备就绪，请上传 PDF</div>
+        <input type="file" id="file-upload" accept="application/pdf">
+        <div id="progress-bar" class="progress-bar"><div id="progress-fill"></div></div>
+        <div id="timer-display" class="timer-info"></div>
+    </div>
+
+    <div class="card">
+        <select id="chapter-select"><option value="">-- 请选择章节 --</option></select>
+        <div class="btn-group">
+            <button class="btn-play" onclick="startReading()">▶ 朗读</button>
+            <button class="btn-pause" onclick="pauseReading()">⏸ 暂停</button>
+            <button class="btn-stop" onclick="stopReading()">⏹ 停止</button>
+        </div>
+        <textarea id="text-area" placeholder="提示：点击文字中间可从该处开始读..."></textarea>
+    </div>
+
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+        let synth = window.speechSynthesis;
+        let utterance = null;
+        let chapters = [];
+        let autoReadTimer = null;
+        let hasInteracted = false;
+        const chapterRegex = /(第\s*[一二三四五六七八九十百0-9]+\s*[章节回].*|Chapter\s*\d+.*)/i;
+
+        document.getElementById('file-upload').addEventListener('change', async function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            resetEverything();
+            startCountdown();
+            document.getElementById('status').innerText = "⏳ 正在解析 PDF...";
+            const reader = new FileReader();
+            reader.onload = async function() {
+                const typedarray = new Uint8Array(this.result);
+                const pdf = await pdfjsLib.getDocument(typedarray).promise;
+                let currentChapterText = "";
+                let lastChapterTitle = "前言";
+                for (let i = 1; i <= pdf.numPages; i++) {
+                    const page = await pdf.getPage(i);
+                    const percent = (i / pdf.numPages) * 100;
+                    document.getElementById('progress-fill').style.width = percent + "%";
+                    let pageText = await extractPageText(page, i);
+                    const lines = pageText.split('\n');
+                    for (let line of lines) {
+                        if (chapterRegex.test(line.trim())) {
+                            saveChapter(lastChapterTitle, currentChapterText);
+                            lastChapterTitle = line.trim();
+                            currentChapterText = "";
+                        }
+                        currentChapterText += line + "\n";
+                    }
+                    if (chapters.length === 0) document.getElementById('text-area').value = currentChapterText;
+                }
+                saveChapter(lastChapterTitle, currentChapterText);
+                document.getElementById('status').innerText = "✅ 扫描完成，发现 " + chapters.length + " 个章节。";
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        async function extractPageText(page, index) {
+            const textContent = await page.getTextContent();
+            let text = textContent.items.map(item => item.str).join(" ").trim();
+            if (text.length < 10) {
+                document.getElementById('status').innerText = "🔍 第 " + index + " 页视觉识别中...";
+                const viewport = page.getViewport({ scale: 1.5 });
+                const canvas = document.createElement('canvas');
+                const context = canvas.getContext('2d');
+                canvas.height = viewport.height; canvas.width = viewport.width;
+                await page.render({ canvasContext: context, viewport: viewport }).promise;
+                const result = await Tesseract.recognize(canvas, 'chi_sim+eng');
+                text = result.data.text;
+            }
+            return text;
+        }
+
+        function saveChapter(title, text) {
+            if (text.trim().length < 5 || chapters.find(c => c.title === title)) return;
+            chapters.push({
