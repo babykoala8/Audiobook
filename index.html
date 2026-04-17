@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <title>AI 智能 PDF 阅读器 (分段防卡版)</title>
+    <title>AI 智能 PDF 阅读器 (终极防卡版)</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://fastly.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.min.js"></script>
@@ -70,7 +70,7 @@
             }
         };
 
-        // ... （文件解析部分代码保持不变，直接沿用上一版的强大逻辑）...
+        // 文件解析逻辑 (保持不变)
         document.getElementById('file-upload').addEventListener('change', async function(e) {
             const file = e.target.files[0];
             if (!file) return;
@@ -195,7 +195,7 @@
             if (index !== "") {
                 document.getElementById('text-area').value = chapters[index].text;
                 document.getElementById('text-area').scrollTop = 0;
-                stopReading(); // 先切断上一章的声音
+                stopReading();
                 setTimeout(() => { startReading(); }, 300);
             }
         });
@@ -253,7 +253,7 @@
         }
 
         // ==========================================
-        // 核心抢救修复：分段喂食朗读队列机制！
+        // 纳米级粉碎喂食机制 (彻底解决 15 秒 Bug)
         // ==========================================
         function startReading() {
             synth.cancel(); // 掐断旧声音
@@ -274,17 +274,31 @@
                 rawText = fullText.substring(startPos);
             }
             
-            // 关键动作：把超长的文字，按“回车换行”切成几十/几百个小段落
-            textChunks = rawText.split('\n').map(item => item.trim()).filter(item => item.length > 0);
+            // 核心粉碎逻辑：在所有的标点符号处，强行劈开！
+            let rawChunks = rawText.replace(/([。！？；，、,.!?;:\n])/g, "$1|").split('|');
+            
+            for (let c of rawChunks) {
+                c = c.trim();
+                if (!c) continue;
+                
+                // 二次保险：如果连逗号都没有，而且这句废话超过了 50 个字，强行按 50 个字用刀切断！
+                while (c.length > 50) {
+                    textChunks.push(c.substring(0, 50));
+                    c = c.substring(50);
+                }
+                if (c.length > 0) textChunks.push(c);
+            }
             
             if(textChunks.length === 0) return;
 
             document.getElementById('status').innerText = "📖 正在安全分段朗读中...";
-            playNextChunk(); // 开始读第一段
+            playNextChunk(); 
         }
 
-        // 递归朗读：读完一句，自动无缝接下一句
         function playNextChunk() {
+            // 如果已经被用户手动停止，就别读了
+            if (textChunks.length === 0) return; 
+
             if (currentChunkIndex >= textChunks.length) {
                 document.getElementById('status').innerText = "✅ 朗读结束。";
                 setButtonPlayState();
@@ -298,15 +312,15 @@
 
             utterance.onstart = () => { setButtonPauseState(); };
             
-            // 读完这一句，索引+1，自动触发下一句！
             utterance.onend = () => { 
                 currentChunkIndex++;
                 playNextChunk(); 
             };
             
             utterance.onerror = (e) => { 
-                console.warn("朗读被意外打断", e); 
-                // 忽略被打断的错误，保证流程
+                console.warn("语音片段跳过", e);
+                currentChunkIndex++;
+                playNextChunk(); // 就算这一小块出错，也不准停，继续读下一块！
             };
 
             synth.speak(utterance);
@@ -314,7 +328,7 @@
 
         function stopReading() { 
             userInteracted();
-            textChunks = []; // 清空未读完的任务列表，彻底打断循环
+            textChunks = []; // 只要清空数组，递归朗读就会瞬间死亡停止
             synth.cancel(); 
             setButtonPlayState(); 
             document.getElementById('status').innerText = "⏹ 播放已停止"; 
