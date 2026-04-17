@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <title>AI 智能 PDF 阅读器 (抗卡死终极版)</title>
+    <title>AI 智能 PDF 阅读器 (章节精准对齐版)</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://fastly.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.min.js"></script>
@@ -21,7 +21,6 @@
         .btn-stop { background-color: #ea4335; }
         .progress-bar { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; margin: 10px 0; }
         #progress-fill { height: 100%; background: #1a73e8; width: 0%; transition: 0.3s; }
-        .smart-tip { font-size: 13px; color: #e67e22; background: #fdf2e9; padding: 8px; border-radius: 5px; margin-bottom: 10px; }
     </style>
 </head>
 <body>
@@ -31,12 +30,11 @@
         <div id="status">正在检查系统环境...</div>
         <input type="file" id="file-upload" accept="application/pdf">
         <div class="progress-bar"><div id="progress-fill"></div></div>
+        <div id="timer-display" style="color: #d93025; font-weight: bold; text-align: center; font-size: 14px;"></div>
     </div>
 
     <div class="card">
         <select id="chapter-select"><option value="">-- 请等待文件解析 --</option></select>
-        <div class="smart-tip">💡 <b>高级控制：</b>默认朗读全章；用鼠标选中文字可只读该部分；在文中点击一下可从光标处开始读。</div>
-        
         <div class="btn-group">
             <button id="toggle-btn" class="btn-play" onclick="togglePlayPause()">▶ 播放</button>
             <button class="btn-stop" onclick="stopReading()">⏹ 停止并重置</button>
@@ -49,35 +47,35 @@
         let chapters = [];
         const baseChapterRegex = /(第\s*[一二三四五六七八九十百0-9]+\s*[章节回篇].*|Chapter\s*\d+.*)/i;
 
-        // 全局发声控制变量（极其重要，防止失控）
         let textChunks = [];
         let currentChunkIndex = 0;
         let isCustomPlaying = false; 
-        window.currentUtterance = null; // 强行保留内存引用，防止浏览器失忆Bug
+        window.currentUtterance = null;
 
         window.onload = function() {
             if (typeof pdfjsLib === 'undefined') {
-                document.getElementById('status').innerHTML = "❌ 网络错误，请按 Ctrl+F5 刷新！";
+                document.getElementById('status').innerHTML = "❌ 网络错误，请刷新！";
             } else {
                 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://fastly.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.worker.min.js';
-                document.getElementById('status').innerText = "✅ 准备就绪，请选择 PDF 文件上传";
+                document.getElementById('status').innerText = "✅ 准备就绪，请上传 PDF";
             }
         };
 
-        // --- PDF 解析核心 (未变动) ---
         document.getElementById('file-upload').addEventListener('change', async function(e) {
             const file = e.target.files[0];
             if (!file) return;
             resetEverything();
-            document.getElementById('status').innerText = "⏳ 正在解析 PDF...";
+            document.getElementById('status').innerText = "⏳ 阶段一：正在提取目录结构...";
             
             const reader = new FileReader();
             reader.onload = async function() {
                 try {
                     const typedarray = new Uint8Array(this.result);
                     const pdf = await pdfjsLib.getDocument(typedarray).promise;
+                    
+                    // 1. 扫描前 20 页获取目录骨架
                     let tocTitles = [];
-                    const scanLimit = Math.min(15, pdf.numPages);
+                    const scanLimit = Math.min(20, pdf.numPages);
                     for (let i = 1; i <= scanLimit; i++) {
                         const page = await pdf.getPage(i);
                         const textContent = await page.getTextContent();
@@ -85,32 +83,45 @@
                         const lines = pageText.split(/[\n\r]+/);
                         for(let line of lines) {
                             if(baseChapterRegex.test(line)) {
-                                let cleanTitle = line.replace(/(?:\.{3,}|\s+\d+$)/g, '').trim();
-                                if(cleanTitle.length < 30 && !tocTitles.includes(cleanTitle)) tocTitles.push(cleanTitle);
+                                let cleanTitle = line.replace(/(?:\.{3,}|[\s\.]{2,}\d+$)/g, '').trim();
+                                if(cleanTitle.length > 2 && cleanTitle.length < 35 && !tocTitles.includes(cleanTitle)) {
+                                    tocTitles.push(cleanTitle);
+                                }
                             }
                         }
                     }
 
+                    // 2. 深度扫描并精准对齐内容
+                    document.getElementById('status').innerText = "⏳ 阶段二：正在精准对齐正文...";
                     let currentChapterText = "";
-                    let lastChapterTitle = tocTitles.length > 0 ? "前言/导语" : "未命名章节";
+                    let lastChapterTitle = "前言/导读";
                     
                     for (let i = 1; i <= pdf.numPages; i++) {
                         const page = await pdf.getPage(i);
                         document.getElementById('progress-fill').style.width = (i/pdf.numPages*100) + "%";
                         let pageText = await extractSmartText(page, i);
                         const lines = pageText.split('\n');
+                        
                         for (let line of lines) {
                             const trimmedLine = line.trim();
-                            if (trimmedLine.length < 30 && trimmedLine.length > 2) {
+                            // 🚀 核心修复逻辑：识别目录行特征（带大量点点或结尾带页码）
+                            // 如果这一行看起来像目录里的条目，我们就不触发新章节，防止内容偏移
+                            const isTocLine = /(?:\.{3,}|[\s\.]{3,}\d+$)/.test(trimmedLine);
+
+                            if (trimmedLine.length < 40 && trimmedLine.length > 2 && !isTocLine) {
                                 let isNewChapter = false;
                                 if (tocTitles.length > 0) {
-                                    const matchedTitle = tocTitles.find(t => trimmedLine.includes(t) || t.includes(trimmedLine));
-                                    if (matchedTitle) { isNewChapter = true; lastChapterTitle = matchedTitle; }
+                                    const matchedTitle = tocTitles.find(t => trimmedLine === t || trimmedLine.includes(t));
+                                    if (matchedTitle) { 
+                                        isNewChapter = true; 
+                                        saveChapter(lastChapterTitle, currentChapterText);
+                                        lastChapterTitle = matchedTitle;
+                                        currentChapterText = "";
+                                    }
                                 } else if (baseChapterRegex.test(trimmedLine)) {
-                                    isNewChapter = true; lastChapterTitle = trimmedLine;
-                                }
-                                if (isNewChapter) {
+                                    isNewChapter = true;
                                     saveChapter(lastChapterTitle, currentChapterText);
+                                    lastChapterTitle = trimmedLine;
                                     currentChapterText = "";
                                 }
                             }
@@ -119,14 +130,15 @@
                         if (chapters.length === 0) document.getElementById('text-area').value = currentChapterText;
                     }
                     saveChapter(lastChapterTitle, currentChapterText);
-                    document.getElementById('status').innerText = `🎉 解析完成，共 ${chapters.length} 个章节。`;
+                    document.getElementById('status').innerText = `🎉 解析完成，共分 ${chapters.length} 个章节。`;
                 } catch (err) {
-                    document.getElementById('status').innerHTML = "❌ <b>解析崩溃：</b>文件可能已损坏。";
+                    document.getElementById('status').innerText = "❌ 解析失败。";
                 }
             };
             reader.readAsArrayBuffer(file);
         });
 
+        // 智能提取文字 (包含换行还原)
         async function extractSmartText(page, index) {
             const textContent = await page.getTextContent();
             let lastY, text = "";
@@ -149,16 +161,20 @@
         }
 
         function saveChapter(title, text) {
-            if (text.trim().length < 10) return;
-            if(chapters.length > 0 && chapters[chapters.length-1].title === title) {
-                chapters[chapters.length-1].text += "\n" + text; return;
+            if (text.trim().length < 5) return;
+            // 如果标题完全一样，合并内容
+            let existing = chapters.find(c => c.title === title);
+            if(existing) {
+                existing.text += "\n" + text;
+            } else {
+                chapters.push({ title, text });
+                const select = document.getElementById('chapter-select');
+                if(chapters.length === 1) select.innerHTML = "";
+                const option = document.createElement('option');
+                option.value = chapters.length - 1; 
+                option.text = title;
+                select.add(option);
             }
-            chapters.push({ title, text });
-            const select = document.getElementById('chapter-select');
-            if(chapters.length === 1) select.innerHTML = "";
-            const option = document.createElement('option');
-            option.value = chapters.length - 1; option.text = title;
-            select.add(option);
         }
 
         document.getElementById('chapter-select').addEventListener('change', function(e) {
@@ -171,127 +187,67 @@
             }
         });
 
-        // ==========================================
-        // 🚨 终极防卡死语音引擎 🚨
-        // ==========================================
         const toggleBtn = document.getElementById('toggle-btn');
         function setButtonPlayState() { toggleBtn.innerText = "▶ 播放"; toggleBtn.className = "btn-play"; }
         function setButtonPauseState() { toggleBtn.innerText = "⏸ 暂停"; toggleBtn.className = "btn-pause"; }
 
         function togglePlayPause() {
             if (!isCustomPlaying && currentChunkIndex === 0) {
-                // 完全没在读，从头启动
                 startReading();
             } else if (isCustomPlaying && !synth.paused) {
-                // 正在读，要求暂停
-                synth.pause();
-                setButtonPlayState();
-                document.getElementById('status').innerText = "⏸ 已暂停";
+                synth.pause(); setButtonPlayState();
             } else if (synth.paused) {
-                // 已被暂停，要求继续
-                synth.resume();
-                setButtonPauseState();
-                document.getElementById('status').innerText = "📖 恢复播放...";
+                synth.resume(); setButtonPauseState();
             }
         }
 
         function startReading() {
-            stopReading(); // 确保彻底清空旧任务
-            
+            stopReading();
             const textArea = document.getElementById('text-area');
             const fullText = textArea.value;
             if (!fullText) return;
 
             const startPos = textArea.selectionStart;
             const endPos = textArea.selectionEnd;
-            let rawText = fullText;
-            
-            // 处理光标位置 (修复了停在末尾不发声的问题)
-            if (startPos !== endPos) {
-                rawText = fullText.substring(startPos, endPos);
-            } else if (startPos > 0 && startPos < fullText.length) {
-                rawText = fullText.substring(startPos);
-            } else {
-                rawText = fullText;
-            }
+            let rawText = (startPos !== endPos) ? fullText.substring(startPos, endPos) : (startPos > 0 && startPos < fullText.length ? fullText.substring(startPos) : fullText);
 
-            // 1. 切片：先按换行和标点切开
             let rawChunks = rawText.replace(/([。！？；.!?;\n])/g, "$1|").split('|');
-            
-            // 2. 细化：每片绝对不能超过50个字，彻底防噎死
             textChunks = [];
             for (let c of rawChunks) {
                 c = c.trim();
                 if (!c) continue;
-                while (c.length > 50) {
-                    textChunks.push(c.substring(0, 50));
-                    c = c.substring(50);
-                }
+                while (c.length > 50) { textChunks.push(c.substring(0, 50)); c = c.substring(50); }
                 if (c.length > 0) textChunks.push(c);
             }
-            
             if (textChunks.length === 0) return;
 
-            isCustomPlaying = true;
-            currentChunkIndex = 0;
-            document.getElementById('status').innerText = "📖 正在朗读...";
+            isCustomPlaying = true; currentChunkIndex = 0;
             setButtonPauseState();
-            
-            // 开始接力喂食
             playNextChunk();
         }
 
-        // 递归函数：喂一句，等一句，再喂下一句
         function playNextChunk() {
-            if (!isCustomPlaying) return; // 如果被手动停止，立刻阻断循环
-
-            if (currentChunkIndex >= textChunks.length) {
-                document.getElementById('status').innerText = "✅ 朗读结束。";
-                stopReading(); // 正常读完，重置状态
+            if (!isCustomPlaying || currentChunkIndex >= textChunks.length) {
+                if(currentChunkIndex >= textChunks.length) stopReading();
                 return;
             }
-
-            let text = textChunks[currentChunkIndex];
-            let u = new SpeechSynthesisUtterance(text);
-            u.lang = 'zh-CN';
-            u.rate = 1.1;
-
-            // 💡 神级补丁：把这小段挂载到浏览器的全局窗口上，防止它被偷偷当垃圾回收掉
-            window.currentUtterance = u; 
-
-            u.onend = function() {
-                if (!isCustomPlaying) return; 
-                currentChunkIndex++;
-                // 留 50 毫秒的喘息时间，防止浏览器假死，然后读下一句
-                setTimeout(() => playNextChunk(), 50); 
-            };
-
-            u.onerror = function(e) {
-                console.warn("语音片段跳过", e);
-                if (!isCustomPlaying) return;
-                currentChunkIndex++;
-                setTimeout(() => playNextChunk(), 50);
-            };
-
+            let u = new SpeechSynthesisUtterance(textChunks[currentChunkIndex]);
+            u.lang = 'zh-CN'; u.rate = 1.1;
+            window.currentUtterance = u;
+            u.onend = () => { if (isCustomPlaying) { currentChunkIndex++; setTimeout(playNextChunk, 50); } };
+            u.onerror = () => { if (isCustomPlaying) { currentChunkIndex++; setTimeout(playNextChunk, 50); } };
             synth.speak(u);
         }
 
         function stopReading() { 
-            isCustomPlaying = false; 
-            currentChunkIndex = 0;
-            textChunks = [];
-            window.currentUtterance = null;
-            synth.cancel(); 
-            setButtonPlayState(); 
-            document.getElementById('status').innerText = "⏹ 播放已停止"; 
+            isCustomPlaying = false; currentChunkIndex = 0; textChunks = [];
+            window.currentUtterance = null; synth.cancel(); setButtonPlayState(); 
         }
 
         function resetEverything() {
-            chapters = [];
-            stopReading();
+            chapters = []; stopReading();
             document.getElementById('chapter-select').innerHTML = '<option value="">-- 请等待解析 --</option>';
-            document.getElementById('text-area').value = "";
-            document.getElementById('progress-fill').style.width = "0%";
+            document.getElementById('text-area').value = ""; document.getElementById('progress-fill').style.width = "0%";
         }
     </script>
 </body>
