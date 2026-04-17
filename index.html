@@ -72,15 +72,16 @@
             }
         });
 
-        // 朗读逻辑
+// 朗读逻辑（升级防卡死版）
         function startReading() {
-            if (synth.speaking && !isPaused) return;
-
             if (isPaused) {
                 synth.resume();
                 isPaused = false;
                 return;
             }
+
+            // 关键修复：每次读之前，强制清空之前卡住的声音！
+            synth.cancel(); 
 
             const text = document.getElementById('text-area').value;
             if (!text) {
@@ -91,6 +92,20 @@
             utterance = new SpeechSynthesisUtterance(text);
             utterance.lang = 'zh-CN'; // 设置为中文
             utterance.rate = 1.0;     // 语速
+
+            utterance.onend = () => {
+                isPaused = false;
+                document.getElementById('status').innerText = "📖 读完了。";
+            };
+
+            // 监听错误
+            utterance.onerror = (event) => {
+                console.log("朗读出错：", event);
+                document.getElementById('status').innerText = "❌ 朗读出错，请刷新重试。";
+            };
+
+            synth.speak(utterance);
+        }
 
             // 当读完时的处理
             utterance.onend = () => {
