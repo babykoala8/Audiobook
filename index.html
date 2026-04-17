@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <title>AI 智能 PDF 阅读器 (硬核诊断版)</title>
+    <title>AI 智能 PDF 阅读器 (完美光标版)</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://fastly.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.min.js"></script>
@@ -19,9 +19,9 @@
         .btn-play { background-color: #34a853; }
         .btn-pause { background-color: #fbbc05; }
         .btn-stop { background-color: #ea4335; }
-        .btn-test { background-color: #8e44ad; } /* 测试按钮-紫色 */
         .progress-bar { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; margin: 10px 0; }
         #progress-fill { height: 100%; background: #1a73e8; width: 0%; transition: 0.3s; }
+        .smart-tip { font-size: 13px; color: #e67e22; background: #fdf2e9; padding: 8px; border-radius: 5px; margin-bottom: 10px; }
     </style>
 </head>
 <body>
@@ -34,12 +34,9 @@
     </div>
 
     <div class="card">
-        <div style="margin-bottom: 15px; padding: 10px; background: #f9ebea; border-left: 5px solid #e74c3c; font-size: 14px;">
-            <b>🛠️ 声音排障测试：</b> 请先点击右侧紫色按钮 👉 
-            <button class="btn-test" onclick="systemVoiceTest()" style="width: auto; padding: 5px 15px; margin-left: 10px;">🔊 测试系统语音</button>
-        </div>
-
         <select id="chapter-select"><option value="">-- 请等待文件解析 --</option></select>
+        
+        <div class="smart-tip">💡 <b>高级控制：</b>默认朗读全章；用鼠标选中文字可只读该部分；在文中点击一下可从光标处开始读。</div>
         
         <div class="btn-group">
             <button id="toggle-btn" class="btn-play" onclick="togglePlayPause()">▶ 播放</button>
@@ -54,9 +51,6 @@
         
         const baseChapterRegex = /(第\s*[一二三四五六七八九十百0-9]+\s*[章节回篇].*|Chapter\s*\d+.*)/i;
 
-        // 强行提前唤醒语音引擎 (修复某些浏览器初始没声音的问题)
-        window.speechSynthesis.getVoices();
-
         window.onload = function() {
             if (typeof pdfjsLib === 'undefined') {
                 document.getElementById('status').innerHTML = "❌ 网络错误，请按 Ctrl+F5 刷新！";
@@ -65,23 +59,6 @@
                 document.getElementById('status').innerText = "✅ 准备就绪，请选择 PDF 文件上传";
             }
         };
-
-        // ==========================================
-        // 🚨 终极诊断：系统语音测试
-        // ==========================================
-        function systemVoiceTest() {
-            synth.cancel(); // 掐断一切
-            let testUtterance = new SpeechSynthesisUtterance("你好，测试成功！系统语音引擎运作正常。");
-            testUtterance.lang = 'zh-CN';
-            
-            testUtterance.onstart = () => { document.getElementById('status').innerText = "🔊 正在测试声音..."; };
-            testUtterance.onend = () => { document.getElementById('status').innerText = "✅ 测试发音完成！"; };
-            testUtterance.onerror = (e) => { 
-                alert("严重故障：你的浏览器拒绝发声或没有中文语音包！错误代码：" + e.error); 
-            };
-            
-            synth.speak(testUtterance);
-        }
 
         // --- PDF 解析模块 (保持不变) ---
         document.getElementById('file-upload').addEventListener('change', async function(e) {
@@ -189,11 +166,11 @@
                 document.getElementById('text-area').value = chapters[index].text;
                 document.getElementById('text-area').scrollTop = 0;
                 stopReading();
-                startReading(); // 零延迟触发
+                startReading();
             }
         });
 
-        // --- 零延迟同步播放引擎 ---
+        // --- 播放引擎控制 ---
         const toggleBtn = document.getElementById('toggle-btn');
         function setButtonPlayState() { toggleBtn.innerText = "▶ 播放"; toggleBtn.className = "btn-play"; }
         function setButtonPauseState() { toggleBtn.innerText = "⏸ 暂停"; toggleBtn.className = "btn-pause"; }
@@ -209,34 +186,43 @@
         }
 
         function startReading() {
-            // 不加任何 setTimeout，确保是同步用户手势唤醒！
             synth.cancel(); 
             
             const textArea = document.getElementById('text-area');
             const fullText = textArea.value;
             if (!fullText) return;
 
+            // ==========================================
+            // 🚨 核心修复：彻底解决“幽灵光标” Bug 
+            // ==========================================
             const startPos = textArea.selectionStart;
             const endPos = textArea.selectionEnd;
             let rawText = fullText;
             
-            if (startPos !== endPos) rawText = fullText.substring(startPos, endPos);
-            else if (startPos > 0) rawText = fullText.substring(startPos);
+            if (startPos !== endPos) {
+                // 情况一：用户明确用鼠标划蓝了一段字
+                rawText = fullText.substring(startPos, endPos);
+            } else if (startPos > 0 && startPos < fullText.length) {
+                // 情况二：光标真的停在文章“中间”
+                rawText = fullText.substring(startPos);
+            } else {
+                // 情况三：光标在 0（最开头）或者 = fullText.length（刚传完文件/打完字在最末尾）
+                // 统统按读全文处理！
+                rawText = fullText;
+            }
 
-            // 用最简单的回车切分，直接塞进队列
+            // 用回车切开丢进系统排队
             let validChunks = rawText.split('\n').map(c => c.trim()).filter(c => c.length > 0);
             
             if (validChunks.length === 0) return;
             document.getElementById('status').innerText = "📖 正在朗读...";
             setButtonPauseState();
 
-            // 循环扔进浏览器的发声队列里
             for (let i = 0; i < validChunks.length; i++) {
                 let u = new SpeechSynthesisUtterance(validChunks[i]);
                 u.lang = 'zh-CN';
                 u.rate = 1.1;
                 
-                // 最后一句读完重置按钮
                 if (i === validChunks.length - 1) {
                     u.onend = () => {
                         document.getElementById('status').innerText = "✅ 朗读结束。";
