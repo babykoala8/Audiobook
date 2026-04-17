@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <title>AI 智能 PDF 阅读器 (精准版)</title>
+    <title>AI 智能 PDF 阅读器 (单键控制版)</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://fastly.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.min.js"></script>
@@ -9,68 +9,103 @@
     <style>
         body { font-family: sans-serif; padding: 15px; line-height: 1.5; max-width: 800px; margin: 0 auto; background-color: #f0f2f5; }
         .card { background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 15px; }
-        h1 { text-align: center; color: #1a73e8; margin: 0 0 10px 0; }
-        #status { padding: 10px; background: #e8f0fe; color: #1967d2; font-size: 13px; margin-bottom: 10px; border-radius: 5px; font-weight: bold; border-left: 5px solid #1a73e8; }
-        #file-upload { margin: 10px 0; width: 100%; }
-        #chapter-select { width: 100%; padding: 12px; margin: 10px 0; border-radius: 8px; border: 1px solid #1a73e8; font-size: 16px; background: #fff; cursor: pointer; }
-        #text-area { width: 100%; height: 400px; padding: 15px; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box; font-size: 16px; line-height: 1.8; }
-        .btn-group { display: flex; gap: 10px; margin-top: 10px; }
-        button { flex: 1; padding: 12px; border: none; border-radius: 8px; cursor: pointer; color: white; font-size: 16px; font-weight: bold; transition: 0.2s; }
-        .btn-play { background-color: #34a853; }
-        .btn-play:hover { background-color: #2d9249; }
-        .btn-stop { background-color: #ea4335; }
+        h1 { text-align: center; color: #1a73e8; margin: 0 0 10px 0; font-size: 24px; }
+        #status { padding: 10px; background: #e8f0fe; color: #1967d2; font-size: 14px; margin-bottom: 10px; border-radius: 5px; font-weight: bold; border-left: 5px solid #1a73e8; }
+        #file-upload { margin: 10px 0; width: 100%; font-size: 15px; }
+        #timer-display { color: #d93025; font-weight: bold; text-align: center; font-size: 14px; }
+        #chapter-select { width: 100%; padding: 10px; margin: 10px 0; border-radius: 5px; border: 1px solid #1a73e8; font-size: 15px; background: #fff; cursor: pointer; }
+        #text-area { width: 100%; height: 400px; padding: 15px; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; font-size: 16px; line-height: 1.8; }
+        .btn-group { display: flex; gap: 8px; margin: 10px 0; }
+        button { flex: 1; padding: 12px; border: none; border-radius: 5px; cursor: pointer; color: white; font-size: 15px; font-weight: bold; transition: 0.2s; }
+        
+        /* 按钮基础颜色 */
+        .btn-play { background-color: #34a853; } /* 绿色-播放 */
+        .btn-pause { background-color: #fbbc05; } /* 黄色-暂停 */
+        .btn-stop { background-color: #ea4335; } /* 红色-停止 */
+        
         .progress-bar { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; margin: 10px 0; }
         #progress-fill { height: 100%; background: #1a73e8; width: 0%; transition: 0.3s; }
+        .smart-tip { font-size: 13px; color: #e67e22; background: #fdf2e9; padding: 8px; border-radius: 5px; margin-bottom: 10px; }
     </style>
 </head>
 <body>
 
     <div class="card">
-        <h1>📚 智能 PDF 阅读器</h1>
-        <div id="status">正在初始化...</div>
+        <h1>📚 AI 智能有声书阅读器</h1>
+        <div id="status">正在检查系统环境...</div>
         <input type="file" id="file-upload" accept="application/pdf">
         <div class="progress-bar"><div id="progress-fill"></div></div>
+        <div id="timer-display"></div>
     </div>
 
     <div class="card">
-        <label>📖 章节切换 (点击自动播放)：</label>
-        <select id="chapter-select"><option value="">-- 请选择章节 --</option></select>
+        <label>📖 章节目录 (提取后在此切换)：</label>
+        <select id="chapter-select"><option value="">-- 请等待文件解析 --</option></select>
+        
+        <div class="smart-tip">💡 <b>高级控制：</b>默认朗读全章；用鼠标选中文字可只读该句；在文中点击一下可从光标处开始读。</div>
+        
         <div class="btn-group">
-            <button class="btn-play" onclick="startReading()">▶ 播放/继续</button>
-            <button class="btn-stop" onclick="stopReading()">⏹ 停止</button>
+            <button id="toggle-btn" class="btn-play" onclick="togglePlayPause()">▶ 播放</button>
+            <button class="btn-stop" onclick="stopReading()">⏹ 停止并重置</button>
         </div>
-        <textarea id="text-area" placeholder="提取的文字会显示在这里，点击文字可指定起始位置..."></textarea>
+        <textarea id="text-area" placeholder="正文内容将在此显示..."></textarea>
     </div>
 
     <script>
         let synth = window.speechSynthesis;
         let utterance = null;
         let chapters = [];
-        const chapterRegex = /^(第\s*[一二三四五六七八九十百0-9]+\s*[章节回].*|Chapter\s*\d+.*)$/i;
+        let autoReadTimer = null;
+        let hasInteracted = false;
+        
+        const baseChapterRegex = /(第\s*[一二三四五六七八九十百0-9]+\s*[章节回篇].*|Chapter\s*\d+.*)/i;
 
         window.onload = function() {
             if (typeof pdfjsLib === 'undefined') {
-                document.getElementById('status').innerText = "❌ 网络加载失败，请刷新页面！";
+                document.getElementById('status').innerHTML = "❌ <b>网络错误：</b>核心组件加载失败，请按 Ctrl+F5 强制刷新网页！";
             } else {
                 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://fastly.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.worker.min.js';
-                document.getElementById('status').innerText = "✅ 准备就绪，请上传 PDF";
+                document.getElementById('status').innerText = "✅ 准备就绪，请选择 PDF 文件上传";
             }
         };
 
         document.getElementById('file-upload').addEventListener('change', async function(e) {
             const file = e.target.files[0];
             if (!file) return;
-            
             resetEverything();
-            document.getElementById('status').innerText = "⏳ 正在深度解析文档结构...";
+            document.getElementById('status').innerText = "⏳ 阶段一：正在光速扫描前置目录树...";
             
             const reader = new FileReader();
             reader.onload = async function() {
                 try {
                     const typedarray = new Uint8Array(this.result);
                     const pdf = await pdfjsLib.getDocument(typedarray).promise;
+                    
+                    let tocTitles = [];
+                    const scanLimit = Math.min(15, pdf.numPages);
+                    for (let i = 1; i <= scanLimit; i++) {
+                        const page = await pdf.getPage(i);
+                        const textContent = await page.getTextContent();
+                        const pageText = textContent.items.map(item => item.str).join(" ");
+                        const lines = pageText.split(/[\n\r]+/);
+                        for(let line of lines) {
+                            if(baseChapterRegex.test(line)) {
+                                let cleanTitle = line.replace(/(?:\.{3,}|\s+\d+$)/g, '').trim();
+                                if(cleanTitle.length < 30 && !tocTitles.includes(cleanTitle)) {
+                                    tocTitles.push(cleanTitle);
+                                }
+                            }
+                        }
+                    }
+
+                    if(tocTitles.length > 0) {
+                        document.getElementById('status').innerText = `✅ 成功捕获 ${tocTitles.length} 条真实目录。正在全文锚定...`;
+                    } else {
+                        document.getElementById('status').innerText = `⚠️ 未发现标准目录，进行全书启发式扫描...`;
+                    }
+
                     let currentChapterText = "";
-                    let lastChapterTitle = "前言/全文";
+                    let lastChapterTitle = tocTitles.length > 0 ? "前言/导语" : "未命名章节";
                     
                     for (let i = 1; i <= pdf.numPages; i++) {
                         const page = await pdf.getPage(i);
@@ -81,44 +116,52 @@
                         
                         for (let line of lines) {
                             const trimmedLine = line.trim();
-                            // 只有当这一行很短（小于30字）且符合章节格式时，才判定为新章节
-                            if (trimmedLine.length < 30 && chapterRegex.test(trimmedLine)) {
-                                saveChapter(lastChapterTitle, currentChapterText);
-                                lastChapterTitle = trimmedLine;
-                                currentChapterText = "";
+                            if (trimmedLine.length < 30 && trimmedLine.length > 2) {
+                                let isNewChapter = false;
+                                if (tocTitles.length > 0) {
+                                    const matchedTitle = tocTitles.find(t => trimmedLine.includes(t) || t.includes(trimmedLine));
+                                    if (matchedTitle) {
+                                        isNewChapter = true;
+                                        lastChapterTitle = matchedTitle;
+                                    }
+                                } else if (baseChapterRegex.test(trimmedLine)) {
+                                    isNewChapter = true;
+                                    lastChapterTitle = trimmedLine;
+                                }
+
+                                if (isNewChapter) {
+                                    saveChapter(lastChapterTitle, currentChapterText);
+                                    currentChapterText = "";
+                                }
                             }
                             currentChapterText += line + "\n";
                         }
-                        // 实时更新显示
                         if (chapters.length === 0) document.getElementById('text-area').value = currentChapterText;
                     }
                     saveChapter(lastChapterTitle, currentChapterText);
-                    document.getElementById('status').innerText = `✅ 识别完毕，共找到 ${chapters.length} 个部分。`;
+                    document.getElementById('status').innerText = `🎉 解析完成，共划分 ${chapters.length} 个章节。`;
+                    startCountdown();
                 } catch (err) {
-                    document.getElementById('status').innerText = "❌ 解析失败，文件可能有加密。";
+                    console.error(err);
+                    document.getElementById('status').innerHTML = "❌ <b>解析崩溃：</b>文件可能已损坏或受 DRM 密码保护。";
                 }
             };
             reader.readAsArrayBuffer(file);
         });
 
-        // 核心优化：智能提取段落文字
         async function extractSmartText(page, index) {
             const textContent = await page.getTextContent();
             let lastY, text = "";
-            
-            // 按照坐标拼接文字，保留换行
             for (let item of textContent.items) {
-                // 如果垂直坐标变化超过5个单位，判定为换行
-                if (lastY !== undefined && Math.abs(item.transform[5] - lastY) > 5) {
+                if (lastY !== undefined && Math.abs(item.transform[5] - lastY) > 6) {
                     text += "\n";
                 }
                 text += item.str;
                 lastY = item.transform[5];
             }
 
-            // 如果文字实在太少，启动 OCR
             if (text.trim().length < 20) {
-                document.getElementById('status').innerText = `🔍 第 ${index} 页正在进行 AI 识别...`;
+                document.getElementById('status').innerText = `🔍 第 ${index} 页文字稀少，启动 AI 识别...`;
                 const viewport = page.getViewport({ scale: 1.5 });
                 const canvas = document.createElement('canvas');
                 const context = canvas.getContext('2d');
@@ -131,30 +174,106 @@
         }
 
         function saveChapter(title, text) {
-            if (text.trim().length < 2) return;
+            if (text.trim().length < 10) return;
+            if(chapters.length > 0 && chapters[chapters.length-1].title === title) {
+                chapters[chapters.length-1].text += "\n" + text;
+                return;
+            }
             chapters.push({ title, text });
             const select = document.getElementById('chapter-select');
+            if(chapters.length === 1) select.innerHTML = "";
             const option = document.createElement('option');
-            option.value = chapters.length - 1;
-            option.text = title;
+            option.value = chapters.length - 1; option.text = title;
             select.add(option);
         }
 
-        // 核心优化：选完章节自动开始读
         document.getElementById('chapter-select').addEventListener('change', function(e) {
+            userInteracted();
             const index = e.target.value;
             if (index !== "") {
                 document.getElementById('text-area').value = chapters[index].text;
-                // 重置滚动条到顶端
                 document.getElementById('text-area').scrollTop = 0;
-                // 自动开始播放
-                setTimeout(() => { startReading(); }, 200);
+                // 切换章节时先强制切断声音，重置按钮，再开始新的朗读
+                synth.cancel();
+                setButtonPlayState(); 
+                setTimeout(() => { startReading(); }, 300);
             }
         });
 
+        function userInteracted() {
+            hasInteracted = true;
+            clearInterval(autoReadTimer);
+            document.getElementById('timer-display').innerText = "";
+        }
+
+        function startCountdown() {
+            let seconds = 60;
+            autoReadTimer = setInterval(() => {
+                if (hasInteracted) return userInteracted();
+                seconds--;
+                document.getElementById('timer-display').innerText = `⏳ ${seconds} 秒后自动播放前三章... (点击页面取消)`;
+                if (seconds <= 0) {
+                    clearInterval(autoReadTimer);
+                    autoReadFirstThree();
+                }
+            }, 1000);
+        }
+
+        function autoReadFirstThree() {
+            if (hasInteracted) return;
+            document.getElementById('timer-display').innerText = "🚀 自动播放已启动";
+            let combined = "";
+            for (let i = 0; i < Math.min(3, chapters.length); i++) {
+                combined += `\n【${chapters[i].title}】\n` + chapters[i].text + "\n\n";
+            }
+            if (combined !== "") {
+                document.getElementById('text-area').value = combined;
+                document.getElementById('text-area').scrollTop = 0;
+            }
+            startReading();
+        }
+
+        // ==========================================
+        // 核心升级：按钮状态同步控制逻辑
+        // ==========================================
+        const toggleBtn = document.getElementById('toggle-btn');
+
+        // 设置按钮显示为“播放”（绿色）
+        function setButtonPlayState() {
+            toggleBtn.innerText = "▶ 播放";
+            toggleBtn.className = "btn-play";
+        }
+
+        // 设置按钮显示为“暂停”（黄色）
+        function setButtonPauseState() {
+            toggleBtn.innerText = "⏸ 暂停";
+            toggleBtn.className = "btn-pause";
+        }
+
+        // 切换播放/暂停核心功能
+        function togglePlayPause() {
+            userInteracted();
+            
+            // 状态一：如果当前正在读，但并没有被暂停 -> 执行暂停
+            if (synth.speaking && !synth.paused) {
+                synth.pause();
+                setButtonPlayState(); // 变成可以再次点击播放的样子
+                document.getElementById('status').innerText = "⏸ 已暂停播放";
+            } 
+            // 状态二：如果当前被暂停了 -> 恢复播放
+            else if (synth.paused) {
+                synth.resume();
+                setButtonPauseState(); // 变回暂停的样式
+                document.getElementById('status').innerText = "📖 恢复播放...";
+            } 
+            // 状态三：如果当前完全没在说话 -> 从头(或光标)开始读
+            else {
+                startReading();
+            }
+        }
+
         function startReading() {
-            if (synth.paused) { synth.resume(); return; }
-            synth.cancel();
+            synth.cancel(); // 每次开始新朗读前清空队列
 
             const textArea = document.getElementById('text-area');
             const fullText = textArea.value;
@@ -163,28 +282,56 @@
             const startPos = textArea.selectionStart;
             const endPos = textArea.selectionEnd;
             
-            // 如果有划选则读划选，如果有光标则从光标读，否则读全文
-            let textToRead = (startPos !== endPos) ? fullText.substring(startPos, endPos) : fullText.substring(startPos);
+            let textToRead = fullText;
+            if (startPos !== endPos) {
+                textToRead = fullText.substring(startPos, endPos);
+                document.getElementById('status').innerText = "📖 正在朗读高亮选中的片段...";
+            } else if (startPos > 0) {
+                textToRead = fullText.substring(startPos);
+                document.getElementById('status').innerText = "📖 正在从光标处开始朗读...";
+            } else {
+                document.getElementById('status').innerText = "📖 正在朗读全文...";
+            }
             
             utterance = new SpeechSynthesisUtterance(textToRead);
             utterance.lang = 'zh-CN';
             utterance.rate = 1.1;
             
-            utterance.onstart = () => { document.getElementById('status').innerText = "📖 正在播放中..."; };
-            utterance.onend = () => { document.getElementById('status').innerText = "✅ 播放结束。"; };
+            // 绑定事件：当发声真正开始时，让按钮变成“暂停”
+            utterance.onstart = () => { setButtonPauseState(); };
+            
+            // 绑定事件：当发声自然结束，或发生错误时，让按钮恢复成“播放”
+            utterance.onend = () => { 
+                document.getElementById('status').innerText = "✅ 朗读结束。"; 
+                setButtonPlayState(); 
+            };
+            utterance.onerror = () => { setButtonPlayState(); };
             
             synth.speak(utterance);
         }
 
-        function stopReading() { synth.cancel(); document.getElementById('status').innerText = "⏹ 已停止"; }
+        function stopReading() { 
+            userInteracted();
+            synth.cancel(); 
+            setButtonPlayState(); // 停止后重置按钮
+            document.getElementById('status').innerText = "⏹ 播放已停止"; 
+        }
 
         function resetEverything() {
-            synth.cancel();
+            clearInterval(autoReadTimer);
+            hasInteracted = false;
             chapters = [];
-            document.getElementById('chapter-select').innerHTML = '<option value="">-- 请选择章节 --</option>';
+            synth.cancel();
+            setButtonPlayState();
+            document.getElementById('chapter-select').innerHTML = '<option value="">-- 请等待文件解析 --</option>';
             document.getElementById('text-area').value = "";
             document.getElementById('progress-fill').style.width = "0%";
+            document.getElementById('timer-display').innerText = "";
         }
+        
+        document.body.addEventListener('click', function() {
+            if(!hasInteracted && chapters.length > 0) userInteracted();
+        });
     </script>
 </body>
 </html>
