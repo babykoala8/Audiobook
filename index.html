@@ -1,149 +1,31 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <title>我的PDF有声书阅读器-AI视觉版</title>
+    <title>AI 智能 PDF 章节阅读器 (精准朗读版)</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <style>
-        body { font-family: sans-serif; padding: 20px; line-height: 1.6; max-width: 800px; margin: 0 auto; background-color: #f4f7f6; }
-        .controls { margin-bottom: 20px; background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        #text-area { width: 100%; height: 300px; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px; margin-top: 10px; }
-        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #3498db; color: white; border: none; border-radius: 4px; margin-right: 10px; margin-bottom: 5px;}
-        button:hover { background-color: #2980b9; }
-        #status { color: #e67e22; font-weight: bold; margin-top: 10px; padding: 10px; background: #fff3e0; border-radius: 4px; }
-        .tips { font-size: 12px; color: #e74c3c; margin-top: 10px; font-weight: bold; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; line-height: 1.6; max-width: 900px; margin: 0 auto; background-color: #f0f2f5; color: #333; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        h1 { text-align: center; color: #1a73e8; }
+        .timer-info { color: #d93025; font-weight: bold; text-align: center; margin: 10px 0; font-size: 1.1em; }
+        select { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #ccc; font-size: 16px; margin: 10px 0; }
+        #text-area { width: 100%; height: 400px; padding: 15px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 16px; background: #fafafa; }
+        .btn-group { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 15px; }
+        button { flex: 1; min-width: 120px; padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; transition: 0.3s; color: white; }
+        .btn-play { background-color: #34a853; }
+        .btn-pause { background-color: #fbbc05; }
+        .btn-stop { background-color: #ea4335; }
+        #status { padding: 10px; border-radius: 6px; background: #e8f0fe; color: #1967d2; font-size: 14px; margin-bottom: 10px; }
+        .progress-bar { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; margin-top: 5px; }
+        #progress-fill { height: 100%; background: #1a73e8; width: 0%; transition: 0.3s; }
+        .smart-tip { font-size: 14px; color: #e67e22; background: #fdf2e9; padding: 10px; border-radius: 6px; margin-bottom: 15px; border-left: 4px solid #e67e22; }
     </style>
 </head>
 <body>
 
-    <h1>📚 我的 PDF 有声书 (支持图片扫描件)</h1>
-    
-    <div class="controls">
-        <p><strong>第一步：上传 PDF</strong></p>
-        <input type="file" id="file-upload" accept="application/pdf">
-        <div id="status">等待上传...</div>
-        <div class="tips">⚠️ 提示：如果是扫描件，网页会启动 AI 视觉识别，处理速度会比较慢，请耐心等待！</div>
-    </div>
-
-    <div class="controls">
-        <p><strong>第二步：控制朗读</strong></p>
-        <button onclick="startReading()">▶ 开始/继续</button>
-        <button onclick="pauseReading()">⏸ 暂停</button>
-        <button onclick="stopReading()">⏹ 停止并清空</button>
-    </div>
-
-    <p>提取出的文字内容：</p>
-    <textarea id="text-area" placeholder="提取的文字会显示在这里..."></textarea>
-
-    <script>
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
-
-        let synth = window.speechSynthesis;
-        let utterance = null;
-
-        document.getElementById('file-upload').addEventListener('change', async function(e) {
-            const file = e.target.files[0];
-            if (!file) return;
-
-            stopReading();
-            document.getElementById('text-area').value = "";
-            document.getElementById('status').innerText = "⏳ 正在加载 PDF 文件...";
-
-            const reader = new FileReader();
-            reader.onload = async function() {
-                try {
-                    const typedarray = new Uint8Array(this.result);
-                    const pdf = await pdfjsLib.getDocument(typedarray).promise;
-                    let fullText = "";
-
-                    for (let i = 1; i <= pdf.numPages; i++) {
-                        document.getElementById('status').innerText = `⏳ 正在处理第 ${i} / ${pdf.numPages} 页...`;
-                        
-                        const page = await pdf.getPage(i);
-                        
-                        // 1. 先尝试用普通方法提取文字
-                        const textContent = await page.getTextContent();
-                        let pageText = textContent.items.map(item => item.str).join(" ").trim();
-                        
-                        // 2. 如果这页字太少，说明大概率是图片扫描件，启动 OCR！
-                        if (pageText.length < 10) {
-                            document.getElementById('status').innerText = `🔍 第 ${i} 页似乎是图片，正在启动 AI 视觉识别(这需要几十秒，请不要关闭网页)...`;
-                            
-                            // 把 PDF 页面渲染成一张看不见的图片 (Canvas)
-                            const scale = 1.5; // 放大一点，识别更准
-                            const viewport = page.getViewport({ scale: scale });
-                            const canvas = document.createElement('canvas');
-                            const context = canvas.getContext('2d');
-                            canvas.height = viewport.height;
-                            canvas.width = viewport.width;
-
-                            await page.render({ canvasContext: context, viewport: viewport }).promise;
-
-                            // 呼叫 Tesseract 进行视觉识别 (识别中文简体和英文)
-                            const result = await Tesseract.recognize(
-                                canvas,
-                                'chi_sim+eng',
-                                { 
-                                    logger: m => {
-                                        if(m.status === 'recognizing text') {
-                                            document.getElementById('status').innerText = `👁️ 第 ${i} 页视觉识别进度: ${Math.round(m.progress * 100)}%`;
-                                        }
-                                    }
-                                }
-                            );
-                            pageText = result.data.text;
-                        }
-
-                        fullText += pageText + "\n\n";
-                        // 把每次识别出的字实时显示在框里
-                        document.getElementById('text-area').value = fullText; 
-                    }
-
-                    document.getElementById('status').innerText = "✅ 全文提取完成！可以点“开始”听书了。";
-                    
-                } catch (err) {
-                    console.error(err);
-                    document.getElementById('status').innerText = "❌ 读取失败，请确保网络畅通或文件未损坏。";
-                }
-            };
-            reader.readAsArrayBuffer(file);
-        });
-
-        // --- 以下是朗读逻辑，保持不变 ---
-        function startReading() {
-            if (synth.paused) { synth.resume(); return; }
-            if (synth.speaking) return;
-
-            synth.cancel(); // 清空旧队列
-
-            const text = document.getElementById('text-area').value;
-            if (!text || text.length < 5) {
-                alert("没有可读的内容！");
-                return;
-            }
-
-            utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = 'zh-CN';
-            
-            utterance.onstart = () => { document.getElementById('status').innerText = "📖 正在朗读中..."; };
-            utterance.onend = () => { document.getElementById('status').innerText = "✅ 朗读结束。"; };
-
-            synth.speak(utterance);
-        }
-
-        function pauseReading() {
-            if (synth.speaking && !synth.paused) {
-                synth.pause();
-                document.getElementById('status').innerText = "⏸ 已暂停";
-            }
-        }
-
-        function stopReading() {
-            synth.cancel(); 
-            document.getElementById('status').innerText = "⏹ 已停止";
-        }
-    </script>
-</body>
-</html>
+    <div class="card">
+        <h1>📚 智能章节阅读器</h1>
+        <p>1. 上传文件 | 2. 等待目录提取 | 3. 选择章节或等待
