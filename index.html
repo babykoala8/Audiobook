@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <title>AI 智能 PDF 阅读器 (终极防卡版)</title>
+    <title>AI 智能 PDF 阅读器 (极简稳定版)</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://fastly.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.min.js"></script>
@@ -39,7 +39,7 @@
         <label>📖 章节目录 (提取后在此切换)：</label>
         <select id="chapter-select"><option value="">-- 请等待文件解析 --</option></select>
         
-        <div class="smart-tip">💡 <b>高级控制：</b>默认朗读全章；用鼠标选中文字可只读该句；在文中点击一下可从光标处开始读。</div>
+        <div class="smart-tip">💡 <b>高级控制：</b>默认朗读全章；用鼠标选中文字可只读该部分；在文中点击一下可从光标处开始读。</div>
         
         <div class="btn-group">
             <button id="toggle-btn" class="btn-play" onclick="togglePlayPause()">▶ 播放</button>
@@ -50,32 +50,28 @@
 
     <script>
         let synth = window.speechSynthesis;
-        let utterance = null;
         let chapters = [];
         let autoReadTimer = null;
         let hasInteracted = false;
         
-        // 分段朗读专用变量
-        let textChunks = []; 
-        let currentChunkIndex = 0;
-        
+        // 匹配目录特征
         const baseChapterRegex = /(第\s*[一二三四五六七八九十百0-9]+\s*[章节回篇].*|Chapter\s*\d+.*)/i;
 
         window.onload = function() {
             if (typeof pdfjsLib === 'undefined') {
-                document.getElementById('status').innerHTML = "❌ <b>网络错误：</b>核心组件加载失败，请按 Ctrl+F5 强制刷新！";
+                document.getElementById('status').innerHTML = "❌ <b>网络错误：</b>核心组件加载失败，请按 Ctrl+F5 刷新！";
             } else {
                 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://fastly.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.worker.min.js';
                 document.getElementById('status').innerText = "✅ 准备就绪，请选择 PDF 文件上传";
             }
         };
 
-        // 文件解析逻辑 (保持不变)
+        // --- PDF 解析核心 (保持不变) ---
         document.getElementById('file-upload').addEventListener('change', async function(e) {
             const file = e.target.files[0];
             if (!file) return;
             resetEverything();
-            document.getElementById('status').innerText = "⏳ 阶段一：正在光速扫描前置目录树...";
+            document.getElementById('status').innerText = "⏳ 阶段一：正在扫描前置目录树...";
             
             const reader = new FileReader();
             reader.onload = async function() {
@@ -100,11 +96,8 @@
                         }
                     }
 
-                    if(tocTitles.length > 0) {
-                        document.getElementById('status').innerText = `✅ 成功捕获 ${tocTitles.length} 条真实目录。正在全文锚定...`;
-                    } else {
-                        document.getElementById('status').innerText = `⚠️ 未发现标准目录，进行全书启发式扫描...`;
-                    }
+                    if(tocTitles.length > 0) document.getElementById('status').innerText = `✅ 成功捕获 ${tocTitles.length} 条目录。正在全文锚定...`;
+                    else document.getElementById('status').innerText = `⚠️ 未发现标准目录，进行全书启发式扫描...`;
 
                     let currentChapterText = "";
                     let lastChapterTitle = tocTitles.length > 0 ? "前言/导语" : "未命名章节";
@@ -122,15 +115,10 @@
                                 let isNewChapter = false;
                                 if (tocTitles.length > 0) {
                                     const matchedTitle = tocTitles.find(t => trimmedLine.includes(t) || t.includes(trimmedLine));
-                                    if (matchedTitle) {
-                                        isNewChapter = true;
-                                        lastChapterTitle = matchedTitle;
-                                    }
+                                    if (matchedTitle) { isNewChapter = true; lastChapterTitle = matchedTitle; }
                                 } else if (baseChapterRegex.test(trimmedLine)) {
-                                    isNewChapter = true;
-                                    lastChapterTitle = trimmedLine;
+                                    isNewChapter = true; lastChapterTitle = trimmedLine;
                                 }
-
                                 if (isNewChapter) {
                                     saveChapter(lastChapterTitle, currentChapterText);
                                     currentChapterText = "";
@@ -145,7 +133,7 @@
                     startCountdown();
                 } catch (err) {
                     console.error(err);
-                    document.getElementById('status').innerHTML = "❌ <b>解析崩溃：</b>文件可能已损坏或受 DRM 密码保护。";
+                    document.getElementById('status').innerHTML = "❌ <b>解析崩溃：</b>文件可能已损坏。";
                 }
             };
             reader.readAsArrayBuffer(file);
@@ -155,15 +143,12 @@
             const textContent = await page.getTextContent();
             let lastY, text = "";
             for (let item of textContent.items) {
-                if (lastY !== undefined && Math.abs(item.transform[5] - lastY) > 6) {
-                    text += "\n";
-                }
+                if (lastY !== undefined && Math.abs(item.transform[5] - lastY) > 6) text += "\n";
                 text += item.str;
                 lastY = item.transform[5];
             }
-
             if (text.trim().length < 20) {
-                document.getElementById('status').innerText = `🔍 第 ${index} 页文字稀少，启动 AI 识别...`;
+                document.getElementById('status').innerText = `🔍 第 ${index} 页启动 AI 识别...`;
                 const viewport = page.getViewport({ scale: 1.5 });
                 const canvas = document.createElement('canvas');
                 const context = canvas.getContext('2d');
@@ -178,8 +163,7 @@
         function saveChapter(title, text) {
             if (text.trim().length < 10) return;
             if(chapters.length > 0 && chapters[chapters.length-1].title === title) {
-                chapters[chapters.length-1].text += "\n" + text;
-                return;
+                chapters[chapters.length-1].text += "\n" + text; return;
             }
             chapters.push({ title, text });
             const select = document.getElementById('chapter-select');
@@ -189,6 +173,7 @@
             select.add(option);
         }
 
+        // --- 交互控制与定时器 ---
         document.getElementById('chapter-select').addEventListener('change', function(e) {
             userInteracted();
             const index = e.target.value;
@@ -211,11 +196,8 @@
             autoReadTimer = setInterval(() => {
                 if (hasInteracted) return userInteracted();
                 seconds--;
-                document.getElementById('timer-display').innerText = `⏳ ${seconds} 秒后自动播放前三章... (点击页面取消)`;
-                if (seconds <= 0) {
-                    clearInterval(autoReadTimer);
-                    autoReadFirstThree();
-                }
+                document.getElementById('timer-display').innerText = `⏳ ${seconds} 秒后自动播放...`;
+                if (seconds <= 0) { clearInterval(autoReadTimer); autoReadFirstThree(); }
             }, 1000);
         }
 
@@ -223,16 +205,12 @@
             if (hasInteracted) return;
             document.getElementById('timer-display').innerText = "🚀 自动播放已启动";
             let combined = "";
-            for (let i = 0; i < Math.min(3, chapters.length); i++) {
-                combined += `\n【${chapters[i].title}】\n` + chapters[i].text + "\n\n";
-            }
-            if (combined !== "") {
-                document.getElementById('text-area').value = combined;
-                document.getElementById('text-area').scrollTop = 0;
-            }
+            for (let i = 0; i < Math.min(3, chapters.length); i++) combined += chapters[i].text + "\n\n";
+            if (combined !== "") { document.getElementById('text-area').value = combined; }
             startReading();
         }
 
+        // --- 极简播放引擎 (修复 Bug 核心区) ---
         const toggleBtn = document.getElementById('toggle-btn');
         function setButtonPlayState() { toggleBtn.innerText = "▶ 播放"; toggleBtn.className = "btn-play"; }
         function setButtonPauseState() { toggleBtn.innerText = "⏸ 暂停"; toggleBtn.className = "btn-pause"; }
@@ -240,114 +218,75 @@
         function togglePlayPause() {
             userInteracted();
             if (synth.speaking && !synth.paused) {
-                synth.pause();
-                setButtonPlayState();
-                document.getElementById('status').innerText = "⏸ 已暂停播放";
+                synth.pause(); setButtonPlayState(); document.getElementById('status').innerText = "⏸ 已暂停";
             } else if (synth.paused) {
-                synth.resume();
-                setButtonPauseState();
-                document.getElementById('status').innerText = "📖 恢复播放...";
+                synth.resume(); setButtonPauseState(); document.getElementById('status').innerText = "📖 恢复播放...";
             } else {
                 startReading();
             }
         }
 
-        // ==========================================
-        // 纳米级粉碎喂食机制 (彻底解决 15 秒 Bug)
-        // ==========================================
         function startReading() {
-            synth.cancel(); // 掐断旧声音
-            textChunks = []; // 清空旧数据
-            currentChunkIndex = 0;
+            // 第一步：清空并掐断旧声音
+            synth.cancel(); 
+            
+            // 第二步：非常重要的 100 毫秒延迟！防止浏览器吞掉指令！
+            setTimeout(() => {
+                const textArea = document.getElementById('text-area');
+                const fullText = textArea.value;
+                if (!fullText) return;
 
-            const textArea = document.getElementById('text-area');
-            const fullText = textArea.value;
-            if (!fullText) return;
-
-            const startPos = textArea.selectionStart;
-            const endPos = textArea.selectionEnd;
-            
-            let rawText = fullText;
-            if (startPos !== endPos) {
-                rawText = fullText.substring(startPos, endPos);
-            } else if (startPos > 0) {
-                rawText = fullText.substring(startPos);
-            }
-            
-            // 核心粉碎逻辑：在所有的标点符号处，强行劈开！
-            let rawChunks = rawText.replace(/([。！？；，、,.!?;:\n])/g, "$1|").split('|');
-            
-            for (let c of rawChunks) {
-                c = c.trim();
-                if (!c) continue;
+                const startPos = textArea.selectionStart;
+                const endPos = textArea.selectionEnd;
+                let rawText = fullText;
                 
-                // 二次保险：如果连逗号都没有，而且这句废话超过了 50 个字，强行按 50 个字用刀切断！
-                while (c.length > 50) {
-                    textChunks.push(c.substring(0, 50));
-                    c = c.substring(50);
-                }
-                if (c.length > 0) textChunks.push(c);
-            }
-            
-            if(textChunks.length === 0) return;
+                if (startPos !== endPos) rawText = fullText.substring(startPos, endPos);
+                else if (startPos > 0) rawText = fullText.substring(startPos);
 
-            document.getElementById('status').innerText = "📖 正在安全分段朗读中...";
-            playNextChunk(); 
-        }
+                // 第三步：回归第二版的简单队列模式 (按段落切开，直接丢给浏览器排队)
+                let validChunks = rawText.replace(/([。！？；.!?;\n])/g, "$1|").split('|').map(c => c.trim()).filter(c => c.length > 0);
+                
+                if (validChunks.length === 0) return;
+                document.getElementById('status').innerText = "📖 正在朗读...";
+                setButtonPauseState();
 
-        function playNextChunk() {
-            // 如果已经被用户手动停止，就别读了
-            if (textChunks.length === 0) return; 
+                validChunks.forEach((chunk, index) => {
+                    let u = new SpeechSynthesisUtterance(chunk);
+                    u.lang = 'zh-CN';
+                    u.rate = 1.1;
+                    
+                    // 只在最后一段读完时，恢复按钮状态
+                    if (index === validChunks.length - 1) {
+                        u.onend = () => {
+                            document.getElementById('status').innerText = "✅ 朗读结束。";
+                            setButtonPlayState();
+                        };
+                    }
+                    
+                    // 把每一小段直接塞进浏览器的嘴里，它自己知道排队吃
+                    synth.speak(u); 
+                });
 
-            if (currentChunkIndex >= textChunks.length) {
-                document.getElementById('status').innerText = "✅ 朗读结束。";
-                setButtonPlayState();
-                return;
-            }
-
-            let chunk = textChunks[currentChunkIndex];
-            utterance = new SpeechSynthesisUtterance(chunk);
-            utterance.lang = 'zh-CN';
-            utterance.rate = 1.1;
-
-            utterance.onstart = () => { setButtonPauseState(); };
-            
-            utterance.onend = () => { 
-                currentChunkIndex++;
-                playNextChunk(); 
-            };
-            
-            utterance.onerror = (e) => { 
-                console.warn("语音片段跳过", e);
-                currentChunkIndex++;
-                playNextChunk(); // 就算这一小块出错，也不准停，继续读下一块！
-            };
-
-            synth.speak(utterance);
+            }, 100); // 延迟 0.1 秒执行
         }
 
         function stopReading() { 
             userInteracted();
-            textChunks = []; // 只要清空数组，递归朗读就会瞬间死亡停止
             synth.cancel(); 
             setButtonPlayState(); 
             document.getElementById('status').innerText = "⏹ 播放已停止"; 
         }
 
         function resetEverything() {
-            clearInterval(autoReadTimer);
-            hasInteracted = false;
-            chapters = [];
+            clearInterval(autoReadTimer); hasInteracted = false; chapters = [];
             stopReading();
-            document.getElementById('chapter-select').innerHTML = '<option value="">-- 请等待文件解析 --</option>';
+            document.getElementById('chapter-select').innerHTML = '<option value="">-- 请等待解析 --</option>';
             document.getElementById('text-area').value = "";
             document.getElementById('progress-fill').style.width = "0%";
             document.getElementById('timer-display').innerText = "";
         }
         
-        document.body.addEventListener('click', function() {
-            if(!hasInteracted && chapters.length > 0) userInteracted();
-        });
+        document.body.addEventListener('click', function() { if(!hasInteracted && chapters.length > 0) userInteracted(); });
     </script>
 </body>
 </html>
