@@ -1,36 +1,117 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
-    <title>我的PDF有声书</title>
+    <title>我的PDF有声书阅读器</title>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <style>
+        body { font-family: sans-serif; padding: 20px; line-height: 1.6; max-width: 800px; margin: 0 auto; background-color: #f4f7f6; }
+        h1 { color: #2c3e50; }
+        .controls { margin-bottom: 20px; background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        #text-area { width: 100%; height: 300px; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px; margin-top: 10px; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #3498db; color: white; border: none; border-radius: 4px; margin-right: 10px; }
+        button:hover { background-color: #2980b9; }
+        #status { color: #e67e22; font-weight: bold; margin-top: 10px; }
+    </style>
 </head>
 <body>
-    <h1>📚 我的 PDF 阅读器</h1>
-    <p>点击下方按钮，开始听书吧：</p>
+
+    <h1>📚 我的 PDF 有声书</h1>
     
-    <textarea id="text" rows="10" cols="30">你好！这是一个简单的网页版有声书测试。请输入你想朗读的文字。</textarea>
-    <br><br>
-    
-    <button onclick="startReading()">开始朗读</button>
-    <button onclick="pauseReading()">暂停</button>
+    <div class="controls">
+        <p>第一步：上传你的 PDF 文件</p>
+        <input type="file" id="file-upload" accept="application/pdf">
+        <div id="status">等待上传...</div>
+    </div>
+
+    <div class="controls">
+        <p>第二步：控制朗读</p>
+        <button onclick="startReading()">▶ 开始/继续</button>
+        <button onclick="pauseReading()">⏸ 暂停</button>
+        <button onclick="stopReading()">⏹ 停止</button>
+    </div>
+
+    <p>提取出的文字：</p>
+    <textarea id="text-area" placeholder="上传 PDF 后，文字会出现在这里..."></textarea>
 
     <script>
-        let synth = window.speechSynthesis;
-        let utterance;
+        // 配置 PDF.js 的工作模式
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
 
+        let synth = window.speechSynthesis;
+        let utterance = null;
+        let isPaused = false;
+
+        // 监听文件上传动作
+        document.getElementById('file-upload').addEventListener('change', async function(e) {
+            const file = e.target.files[0];
+            if (file && file.type === "application/pdf") {
+                document.getElementById('status').innerText = "⏳ 正在努力提取文字，请稍候...";
+                
+                const reader = new FileReader();
+                reader.onload = async function() {
+                    const typedarray = new Uint8Array(this.result);
+                    
+                    // 使用 PDF.js 读取内容
+                    const pdf = await pdfjsLib.getDocument(typedarray).promise;
+                    let fullText = "";
+
+                    // 循环读取每一页的内容
+                    for (let i = 1; i <= pdf.numPages; i++) {
+                        const page = await pdf.getPage(i);
+                        const textContent = await page.getTextContent();
+                        const pageText = textContent.items.map(item => item.str).join(" ");
+                        fullText += pageText + "\n\n";
+                    }
+
+                    document.getElementById('text-area').value = fullText;
+                    document.getElementById('status').innerText = "✅ 提取完成！可以开始听书了。";
+                };
+                reader.readAsArrayBuffer(file);
+            }
+        });
+
+        // 朗读逻辑
         function startReading() {
-            let content = document.getElementById('text').value;
-            utterance = new SpeechSynthesisUtterance(content);
-            // 记录朗读进度（简单版）
-            utterance.onboundary = (event) => {
-                console.log("读到位置：" + event.charIndex);
+            if (synth.speaking && !isPaused) return;
+
+            if (isPaused) {
+                synth.resume();
+                isPaused = false;
+                return;
+            }
+
+            const text = document.getElementById('text-area').value;
+            if (!text) {
+                alert("请先上传 PDF 或输入文字！");
+                return;
+            }
+
+            utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'zh-CN'; // 设置为中文
+            utterance.rate = 1.0;     // 语速
+
+            // 当读完时的处理
+            utterance.onend = () => {
+                isPaused = false;
+                document.getElementById('status').innerText = "📖 读完了。";
             };
+
             synth.speak(utterance);
         }
 
         function pauseReading() {
-            synth.pause();
+            if (synth.speaking && !isPaused) {
+                synth.pause();
+                isPaused = true;
+            }
+        }
+
+        function stopReading() {
+            synth.cancel();
+            isPaused = false;
         }
     </script>
 </body>
-</html>index.html
+</html>
