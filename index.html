@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>我的PDF有声书</title>
+    <meta charset="UTF-8">
+</head>
+<body>
+    <h1>📚 我的 PDF 阅读器</h1>
+    <p>点击下方按钮，开始听书吧：</p>
+    
+    <textarea id="text" rows="10" cols="30">你好！这是一个简单的网页版有声书测试。请输入你想朗读的文字。</textarea>
+    <br><br>
+    
+    <button onclick="startReading()">开始朗读</button>
+    <button onclick="pauseReading()">暂停</button>
+
+    <script>
+        let synth = window.speechSynthesis;
+        let utterance;
+
+        function startReading() {
+            let content = document.getElementById('text').value;
+            utterance = new SpeechSynthesisUtterance(content);
+            // 记录朗读进度（简单版）
+            utterance.onboundary = (event) => {
+                console.log("读到位置：" + event.charIndex);
+            };
+            synth.speak(utterance);
+        }
+
+        function pauseReading() {
+            synth.pause();
+        }
+    </script>
+</body>
+</html>index.html
