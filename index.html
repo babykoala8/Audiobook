@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <title>AI 智能 PDF 阅读器 (单键控制版)</title>
+    <title>AI 智能 PDF 阅读器 (分段防卡版)</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://fastly.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.min.js"></script>
@@ -17,12 +17,9 @@
         #text-area { width: 100%; height: 400px; padding: 15px; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; font-size: 16px; line-height: 1.8; }
         .btn-group { display: flex; gap: 8px; margin: 10px 0; }
         button { flex: 1; padding: 12px; border: none; border-radius: 5px; cursor: pointer; color: white; font-size: 15px; font-weight: bold; transition: 0.2s; }
-        
-        /* 按钮基础颜色 */
-        .btn-play { background-color: #34a853; } /* 绿色-播放 */
-        .btn-pause { background-color: #fbbc05; } /* 黄色-暂停 */
-        .btn-stop { background-color: #ea4335; } /* 红色-停止 */
-        
+        .btn-play { background-color: #34a853; }
+        .btn-pause { background-color: #fbbc05; }
+        .btn-stop { background-color: #ea4335; }
         .progress-bar { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; margin: 10px 0; }
         #progress-fill { height: 100%; background: #1a73e8; width: 0%; transition: 0.3s; }
         .smart-tip { font-size: 13px; color: #e67e22; background: #fdf2e9; padding: 8px; border-radius: 5px; margin-bottom: 10px; }
@@ -58,17 +55,22 @@
         let autoReadTimer = null;
         let hasInteracted = false;
         
+        // 分段朗读专用变量
+        let textChunks = []; 
+        let currentChunkIndex = 0;
+        
         const baseChapterRegex = /(第\s*[一二三四五六七八九十百0-9]+\s*[章节回篇].*|Chapter\s*\d+.*)/i;
 
         window.onload = function() {
             if (typeof pdfjsLib === 'undefined') {
-                document.getElementById('status').innerHTML = "❌ <b>网络错误：</b>核心组件加载失败，请按 Ctrl+F5 强制刷新网页！";
+                document.getElementById('status').innerHTML = "❌ <b>网络错误：</b>核心组件加载失败，请按 Ctrl+F5 强制刷新！";
             } else {
                 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://fastly.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.worker.min.js';
                 document.getElementById('status').innerText = "✅ 准备就绪，请选择 PDF 文件上传";
             }
         };
 
+        // ... （文件解析部分代码保持不变，直接沿用上一版的强大逻辑）...
         document.getElementById('file-upload').addEventListener('change', async function(e) {
             const file = e.target.files[0];
             if (!file) return;
@@ -193,9 +195,7 @@
             if (index !== "") {
                 document.getElementById('text-area').value = chapters[index].text;
                 document.getElementById('text-area').scrollTop = 0;
-                // 切换章节时先强制切断声音，重置按钮，再开始新的朗读
-                synth.cancel();
-                setButtonPlayState(); 
+                stopReading(); // 先切断上一章的声音
                 setTimeout(() => { startReading(); }, 300);
             }
         });
@@ -233,47 +233,32 @@
             startReading();
         }
 
-        // ==========================================
-        // 核心升级：按钮状态同步控制逻辑
-        // ==========================================
         const toggleBtn = document.getElementById('toggle-btn');
+        function setButtonPlayState() { toggleBtn.innerText = "▶ 播放"; toggleBtn.className = "btn-play"; }
+        function setButtonPauseState() { toggleBtn.innerText = "⏸ 暂停"; toggleBtn.className = "btn-pause"; }
 
-        // 设置按钮显示为“播放”（绿色）
-        function setButtonPlayState() {
-            toggleBtn.innerText = "▶ 播放";
-            toggleBtn.className = "btn-play";
-        }
-
-        // 设置按钮显示为“暂停”（黄色）
-        function setButtonPauseState() {
-            toggleBtn.innerText = "⏸ 暂停";
-            toggleBtn.className = "btn-pause";
-        }
-
-        // 切换播放/暂停核心功能
         function togglePlayPause() {
             userInteracted();
-            
-            // 状态一：如果当前正在读，但并没有被暂停 -> 执行暂停
             if (synth.speaking && !synth.paused) {
                 synth.pause();
-                setButtonPlayState(); // 变成可以再次点击播放的样子
+                setButtonPlayState();
                 document.getElementById('status').innerText = "⏸ 已暂停播放";
-            } 
-            // 状态二：如果当前被暂停了 -> 恢复播放
-            else if (synth.paused) {
+            } else if (synth.paused) {
                 synth.resume();
-                setButtonPauseState(); // 变回暂停的样式
+                setButtonPauseState();
                 document.getElementById('status').innerText = "📖 恢复播放...";
-            } 
-            // 状态三：如果当前完全没在说话 -> 从头(或光标)开始读
-            else {
+            } else {
                 startReading();
             }
         }
 
+        // ==========================================
+        // 核心抢救修复：分段喂食朗读队列机制！
+        // ==========================================
         function startReading() {
-            synth.cancel(); // 每次开始新朗读前清空队列
+            synth.cancel(); // 掐断旧声音
+            textChunks = []; // 清空旧数据
+            currentChunkIndex = 0;
 
             const textArea = document.getElementById('text-area');
             const fullText = textArea.value;
@@ -282,38 +267,56 @@
             const startPos = textArea.selectionStart;
             const endPos = textArea.selectionEnd;
             
-            let textToRead = fullText;
+            let rawText = fullText;
             if (startPos !== endPos) {
-                textToRead = fullText.substring(startPos, endPos);
-                document.getElementById('status').innerText = "📖 正在朗读高亮选中的片段...";
+                rawText = fullText.substring(startPos, endPos);
             } else if (startPos > 0) {
-                textToRead = fullText.substring(startPos);
-                document.getElementById('status').innerText = "📖 正在从光标处开始朗读...";
-            } else {
-                document.getElementById('status').innerText = "📖 正在朗读全文...";
+                rawText = fullText.substring(startPos);
             }
             
-            utterance = new SpeechSynthesisUtterance(textToRead);
+            // 关键动作：把超长的文字，按“回车换行”切成几十/几百个小段落
+            textChunks = rawText.split('\n').map(item => item.trim()).filter(item => item.length > 0);
+            
+            if(textChunks.length === 0) return;
+
+            document.getElementById('status').innerText = "📖 正在安全分段朗读中...";
+            playNextChunk(); // 开始读第一段
+        }
+
+        // 递归朗读：读完一句，自动无缝接下一句
+        function playNextChunk() {
+            if (currentChunkIndex >= textChunks.length) {
+                document.getElementById('status').innerText = "✅ 朗读结束。";
+                setButtonPlayState();
+                return;
+            }
+
+            let chunk = textChunks[currentChunkIndex];
+            utterance = new SpeechSynthesisUtterance(chunk);
             utterance.lang = 'zh-CN';
             utterance.rate = 1.1;
-            
-            // 绑定事件：当发声真正开始时，让按钮变成“暂停”
+
             utterance.onstart = () => { setButtonPauseState(); };
             
-            // 绑定事件：当发声自然结束，或发生错误时，让按钮恢复成“播放”
+            // 读完这一句，索引+1，自动触发下一句！
             utterance.onend = () => { 
-                document.getElementById('status').innerText = "✅ 朗读结束。"; 
-                setButtonPlayState(); 
+                currentChunkIndex++;
+                playNextChunk(); 
             };
-            utterance.onerror = () => { setButtonPlayState(); };
             
+            utterance.onerror = (e) => { 
+                console.warn("朗读被意外打断", e); 
+                // 忽略被打断的错误，保证流程
+            };
+
             synth.speak(utterance);
         }
 
         function stopReading() { 
             userInteracted();
+            textChunks = []; // 清空未读完的任务列表，彻底打断循环
             synth.cancel(); 
-            setButtonPlayState(); // 停止后重置按钮
+            setButtonPlayState(); 
             document.getElementById('status').innerText = "⏹ 播放已停止"; 
         }
 
@@ -321,8 +324,7 @@
             clearInterval(autoReadTimer);
             hasInteracted = false;
             chapters = [];
-            synth.cancel();
-            setButtonPlayState();
+            stopReading();
             document.getElementById('chapter-select').innerHTML = '<option value="">-- 请等待文件解析 --</option>';
             document.getElementById('text-area').value = "";
             document.getElementById('progress-fill').style.width = "0%";
